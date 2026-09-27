@@ -1,0 +1,52 @@
+{
+  "identifier" : "5E1A7C2B",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "21500001",
+      "localizations" : [
+
+      ],
+      "name" : "Eazee AI Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "4.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "6750000001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Unlimited access to Eazee AI Pro features.",
+              "displayName" : "Pro Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.eazee.subscription.pro.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Pro Monthly",
+          "subscriptionGroupID" : "21500001",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}

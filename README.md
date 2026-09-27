@@ -44,6 +44,17 @@ In Xcode, target **EazeeAI → Signing & Capabilities**:
 
 Then run on the device (`npm start` + ▶ in Xcode, or `npx react-native run-ios --device`).
 
+## Run on the Simulator (local StoreKit testing)
+
+The Simulator can't reliably load Sandbox products, so `fetchProducts` returns an empty list there.
+Use the bundled local configuration instead:
+
+1. In Xcode, **Product → Scheme → Edit Scheme → Run → Options → StoreKit Configuration** → `Products.storekit`
+   (if it isn't listed, drag `ios/EazeeAI/Products.storekit` into the project navigator first — no target membership needed).
+2. Run from Xcode (▶). Purchases are simulated locally; manage them in **Debug → StoreKit → Manage Transactions**.
+
+Set it back to **None** before testing against the real Sandbox on a device.
+
 ## Sandbox account
 
 On the iPhone: **Settings → App Store → Sandbox Account** (iOS 18+; on older iOS:
