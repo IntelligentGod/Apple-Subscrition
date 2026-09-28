@@ -12,21 +12,38 @@ through Apple StoreKit (Sandbox), using `react-native-iap` 16 (Nitro / OpenIAP A
 ## Structure
 
 ```
-App.tsx                          screen switching (home / paywall / pro)
+App.tsx                          screen switching (login / home / paywall / pro)
 src/services/subscriptionService.ts   all react-native-iap calls
-src/hooks/useSubscription.ts     app-level StoreKit state + purchase listeners
-src/screens/                     HomeScreen, PaywallScreen, ProScreen
+src/services/api.ts              all backend calls
+src/hooks/useAuth.ts             sign in / sign up / saved session
+src/hooks/useSubscription.ts     StoreKit purchases + plan from the server
+src/screens/                     LoginScreen, HomeScreen, PaywallScreen, ProScreen
 src/components/                  PrimaryButton, PlanCard
-src/constants/                   product ID, colors
-src/types/subscription.ts
+src/constants/                   product ID, API URL, colors
+server/                          backend (Express + PostgreSQL) — see server/README.md
 ```
 
-Flow: `initConnection` → `fetchProducts({ skus, type: 'subs' })` → verify the returned ID →
-`requestPurchase({ request: { apple: { sku } }, type: 'subs' })` → `purchaseUpdatedListener`
-→ grant Pro → `finishTransaction({ isConsumable: false })`.
-On launch and on **Restore Purchases**, entitlement is read from `getAvailablePurchases`.
+Flow: sign in → `fetchProducts` → `requestPurchase({ request: { apple: { sku, appAccountToken: userId } } })`
+→ `purchaseUpdatedListener` → send the signed transaction to `POST /iap/verify` → the server verifies
+Apple's signature and saves it → plan comes back from the server → `finishTransaction`.
+The plan is always read from the server (`GET /me/entitlements`), which Apple keeps up to date
+via App Store Server Notifications (renewals, expiry, refunds).
 
-Out of scope by design: no server-side receipt validation; entitlement is trusted on device.
+## Run the backend first
+
+The app needs the server running. On your Mac (Docker Desktop required for PostgreSQL):
+
+```sh
+cd server
+npm install
+cp .env.example .env     # set JWT_SECRET (openssl rand -hex 32)
+docker compose up -d
+npm run db:migrate
+npm run dev              # http://localhost:3000
+```
+
+The Simulator reaches it at `localhost`. On a physical iPhone, put your Mac's LAN IP in
+`src/constants/api.ts`. Full details: [server/README.md](server/README.md).
 
 ## Run on a physical iPhone (macOS required)
 
@@ -79,4 +96,5 @@ Sandbox monthly subscriptions renew about every 5 minutes. Manage or cancel them
 
 ```sh
 npx tsc --noEmit && npx eslint . && npx jest
+cd server && npm test && npm run typecheck
 ```

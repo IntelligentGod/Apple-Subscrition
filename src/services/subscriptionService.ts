@@ -104,31 +104,42 @@ export async function fetchProMonthly(): Promise<ProMonthlyProduct> {
 /**
  * Opens Apple's purchase sheet. The outcome is delivered asynchronously to
  * `purchaseUpdatedListener` / `purchaseErrorListener`, not via this promise.
+ *
+ * `appAccountToken` is the signed-in user's id (a UUID). Apple stores it on the
+ * transaction, so the server can tell which account a purchase belongs to.
  */
-export async function purchaseProMonthly(): Promise<void> {
+export async function purchaseProMonthly(
+  appAccountToken: string,
+): Promise<void> {
   await requestPurchase({
-    request: { apple: { sku: PRO_MONTHLY_PRODUCT_ID } },
+    request: { apple: { sku: PRO_MONTHLY_PRODUCT_ID, appAccountToken } },
     type: 'subs',
   });
 }
 
-/** Subscriptions are never consumable. Unfinished iOS transactions replay on every launch. */
+/**
+ * Tells StoreKit the purchase was delivered. Only call this after the server
+ * has recorded it — unfinished iOS transactions are re-delivered on every launch.
+ */
 export async function finishPurchase(purchase: Purchase): Promise<void> {
   await finishTransaction({ purchase, isConsumable: false });
 }
 
-/** Returns true if StoreKit reports an active Pro Monthly entitlement. */
-export async function hasActivePro(): Promise<boolean> {
+/** StoreKit's signed transaction (JWS) for a purchase — what the server verifies. */
+export function signedTransactionOf(purchase: Purchase): string | null {
+  return purchase.purchaseToken ?? null;
+}
+
+/**
+ * Syncs with the App Store (may prompt for Apple ID sign-in) and returns the
+ * active Pro purchases on this Apple ID, for the server to verify.
+ */
+export async function restoreProPurchases(): Promise<Purchase[]> {
+  await restorePurchases();
   const purchases = await getAvailablePurchases({
     onlyIncludeActiveItemsIOS: true,
   });
-  return purchases.some(p => p.productId === PRO_MONTHLY_PRODUCT_ID);
-}
-
-/** Syncs with the App Store (may prompt for Apple ID sign-in), then re-checks entitlements. */
-export async function restoreProMonthly(): Promise<boolean> {
-  await restorePurchases();
-  return hasActivePro();
+  return purchases.filter(p => p.productId === PRO_MONTHLY_PRODUCT_ID);
 }
 
 /** Logs a StoreKit error without dumping the full object (which may include tokens). */

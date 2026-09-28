@@ -1,0 +1,46 @@
+// Database tables. After editing: `npm run db:migrate -- --name <change>`
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  /// Also sent to StoreKit as appAccountToken, so Apple ties purchases to this user.
+  id            String         @id @default(uuid()) @db.Uuid
+  email         String         @unique
+  passwordHash  String
+  createdAt     DateTime       @default(now())
+  subscriptions Subscription[]
+}
+
+/// One row per App Store subscription (identified by Apple's originalTransactionId).
+model Subscription {
+  originalTransactionId String    @id
+  userId                String    @db.Uuid
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId             String
+  /// Production | Sandbox | Xcode
+  environment           String
+  /// active | grace_period | billing_retry | expired | revoked
+  status                String
+  expiresAt             DateTime?
+  lastTransactionId     String
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+/// App Store Server Notifications already processed (Apple may send one more than once).
+model AppleNotification {
+  notificationUUID      String   @id
+  notificationType      String
+  subtype               String?
+  originalTransactionId String?
+  receivedAt            DateTime @default(now())
+}

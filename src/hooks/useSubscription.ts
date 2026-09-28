@@ -1,29 +1,70 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ErrorCode, type Purchase, type PurchaseError } from 'react-native-iap';
 
 import { PRO_MONTHLY_PRODUCT_ID } from '../constants/subscriptions';
+import { api, ApiError, type Session } from '../services/api';
 import * as subscriptionService from '../services/subscriptionService';
 import type {
-  Plan,
+  Entitlements,
   ProMonthlyProduct,
   ProductLoadState,
 } from '../types/subscription';
 
+const FREE: Entitlements = {
+  plan: 'free',
+  status: null,
+  productId: null,
+  expiresAt: null,
+  environment: null,
+};
+
 /**
- * App-level StoreKit state. Mounted once in App.tsx so the purchase listener is
+ * App-level subscription state. Mounted once in App.tsx so the purchase listener is
  * active for the whole session — including transactions StoreKit replays on launch.
+ *
+ * The server is the source of truth for the plan: every StoreKit purchase is sent
+ * to POST /iap/verify, and the plan comes from the server's answer.
  */
-export function useSubscription() {
-  const [plan, setPlan] = useState<Plan>('free');
+export function useSubscription(session: Session | null) {
+  const [entitlements, setEntitlements] = useState<Entitlements>(FREE);
   const [product, setProduct] = useState<ProMonthlyProduct | null>(null);
   const [productState, setProductState] = useState<ProductLoadState>('idle');
   const [purchasing, setPurchasing] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  // The purchase listener is registered once; it reads the latest session from here.
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
 
+  /** Sends a purchase to the server; finishes it with StoreKit once the server has it. */
+  const verifyWithServer = useCallback(async (purchase: Purchase) => {
+    const current = sessionRef.current;
+    const signed = subscriptionService.signedTransactionOf(purchase);
+    if (!current || !signed) {
+      // Leave it unfinished: StoreKit re-delivers it, or Restore picks it up after sign-in.
+      return null;
+    }
+    try {
+      const result = await api.verifyPurchase(current.token, signed);
+      await finishSafely(purchase);
+      return result;
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        error.status >= 400 &&
+        error.status < 500 &&
+        error.status !== 401
+      ) {
+        // The server definitively rejected it (e.g. another account's purchase). Retrying won't help.
+        await finishSafely(purchase);
+      }
+      // Network/server errors: don't finish, so StoreKit delivers it again next launch.
+      throw error;
+    }
+  }, []);
+
+  useEffect(() => {
     const onPurchase = async (purchase: Purchase) => {
       if (purchase.productId !== PRO_MONTHLY_PRODUCT_ID) {
         return;
@@ -34,15 +75,21 @@ export function useSubscription() {
         setMessage('Purchase is pending approval.');
         return;
       }
-      // Demo scope: no server-side validation. Grant access, then finish the
-      // transaction so StoreKit stops re-delivering it.
-      setPlan('pro');
-      setPurchasing(false);
-      setMessage(null);
       try {
-        await subscriptionService.finishPurchase(purchase);
+        const result = await verifyWithServer(purchase);
+        if (result) {
+          setEntitlements(result);
+          setMessage(null);
+        }
       } catch (error) {
-        subscriptionService.logIapError('finishTransaction failed', error);
+        subscriptionService.logIapError('Server verification failed', error);
+        setMessage(
+          error instanceof ApiError
+            ? error.message
+            : 'Could not confirm the purchase. Please try Restore Purchases.',
+        );
+      } finally {
+        setPurchasing(false);
       }
     };
 
@@ -59,28 +106,39 @@ export function useSubscription() {
       onPurchase,
       onError,
     );
-
-    // Connect and check for an existing entitlement (e.g. after relaunch or reinstall).
-    (async () => {
-      try {
-        if (
-          (await subscriptionService.connect()) &&
-          (await subscriptionService.hasActivePro()) &&
-          !cancelled
-        ) {
-          setPlan('pro');
-        }
-      } catch (error) {
-        subscriptionService.logIapError('initConnection failed', error);
-      }
-    })();
+    subscriptionService
+      .connect()
+      .catch(error =>
+        subscriptionService.logIapError('initConnection failed', error),
+      );
 
     return () => {
-      cancelled = true;
       subscriptions.forEach(s => s.remove());
       subscriptionService.disconnect().catch(() => {});
     };
+  }, [verifyWithServer]);
+
+  const refresh = useCallback(async () => {
+    const current = sessionRef.current;
+    if (!current) {
+      setEntitlements(FREE);
+      return;
+    }
+    try {
+      setEntitlements(await api.entitlements(current.token));
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'Could not load your plan.',
+      );
+    }
   }, []);
+
+  // Ask the server for the plan whenever the signed-in user changes.
+  const userId = session?.user.id;
+  useEffect(() => {
+    setMessage(null);
+    refresh();
+  }, [userId, refresh]);
 
   const loadProduct = useCallback(async () => {
     setProductState('loading');
@@ -96,13 +154,14 @@ export function useSubscription() {
   }, []);
 
   const subscribe = useCallback(async () => {
-    if (!product) {
+    const current = sessionRef.current;
+    if (!product || !current) {
       return;
     }
     setMessage(null);
     setPurchasing(true);
     try {
-      await subscriptionService.purchaseProMonthly();
+      await subscriptionService.purchaseProMonthly(current.user.id);
       // The result arrives in onPurchase / onError above.
     } catch (error) {
       subscriptionService.logIapError('requestPurchase failed', error);
@@ -111,14 +170,27 @@ export function useSubscription() {
     }
   }, [product]);
 
+  /** Re-sends this Apple ID's active purchases to the server (new phone, reinstall, new account). */
   const restore = useCallback(async () => {
     setMessage(null);
     setRestoring(true);
     try {
-      const active = await subscriptionService.restoreProMonthly();
-      if (active) {
-        setPlan('pro');
+      const purchases = await subscriptionService.restoreProPurchases();
+      let latest: Entitlements | null = null;
+      let lastError: unknown = null;
+      for (const purchase of purchases) {
+        try {
+          latest = (await verifyWithServer(purchase)) ?? latest;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (latest?.plan === 'pro') {
+        setEntitlements(latest);
+      } else if (lastError instanceof ApiError) {
+        setMessage(lastError.message);
       } else {
+        await refresh();
         setMessage('No active Pro subscription found for this Apple ID.');
       }
     } catch (error) {
@@ -127,10 +199,11 @@ export function useSubscription() {
     } finally {
       setRestoring(false);
     }
-  }, []);
+  }, [refresh, verifyWithServer]);
 
   return {
-    plan,
+    plan: entitlements.plan,
+    entitlements,
     product,
     productState,
     purchasing,
@@ -139,7 +212,16 @@ export function useSubscription() {
     loadProduct,
     subscribe,
     restore,
+    refresh,
   };
+}
+
+async function finishSafely(purchase: Purchase) {
+  try {
+    await subscriptionService.finishPurchase(purchase);
+  } catch (error) {
+    subscriptionService.logIapError('finishTransaction failed', error);
+  }
 }
 
 export type SubscriptionController = ReturnType<typeof useSubscription>;

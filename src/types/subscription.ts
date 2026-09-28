@@ -1,5 +1,14 @@
 export type Plan = 'free' | 'pro';
 
+/** What the server says about the signed-in user's subscription (GET /me/entitlements). */
+export interface Entitlements {
+  plan: Plan;
+  status: string | null;
+  productId: string | null;
+  expiresAt: string | null;
+  environment: string | null;
+}
+
 export type ProductLoadState = 'idle' | 'loading' | 'loaded' | 'error';
 
 /** What the paywall needs to render — derived from the StoreKit product. */
